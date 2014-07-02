@@ -55,8 +55,17 @@ public class Pool {
 	/** 线程最大空闲时间 */
 	private long maxIdleTime = 300000;
 	
-	/** 重试连接不能访问服务器 */
+	/** 不能连接重试次数 */
 	private int retryTimesWhileCanNotConnectServer = -1;
+	
+	/** 获得链接为 null 时重试次数 */
+	private int retryTimesWhileGetNullConnection;
+	
+	/** 重新获取链接的线程等待时间 */
+	private long retryDurationDuringGetNullConnection = 1000;
+	
+	/** 线程停动时间 */
+	private long retryDurationDuringConnectingServer = 1000;
 	
 	/** 保持连接激活的SQL */
 	private String keepAliveSql = "select 1;";
@@ -64,6 +73,7 @@ public class Pool {
 	/** 最大使用时间 */
 	private long maxUsingTime = -1;
 	
+	/** 连接池是否关闭 */
 	private boolean closed = false;
 	
 	/** 清理线程 */
@@ -279,5 +289,251 @@ public class Pool {
 		connection.setLastUsingTime(Calendar.getInstance().getTimeInMillis());
 		pool.add(connection);
 	}
+	
+	
+	public Connection getConnection () {
+		if (closed) {
+			return null;
+		}
+		
+		//若连接池为初始化，则初始化
+		synchronized (this) {
+			if (null == pool) {
+				init();
+			}
+		}
+		
+		BConnection bConnection = pool.poll();
+		int i = 0;
+		while (null == bConnection && (i < retryTimesWhileGetNullConnection || retryTimesWhileGetNullConnection <= 0)) {
+			synchronized (this) {
+				if (currentSize.getValue() < maxSize) {
+					increasePool(pool, increment);
+				}
+			}
+			bConnection = pool.poll();
+			if (null != bConnection) {
+				break;
+			}
+			
+			try {
+				Thread.sleep(retryDurationDuringGetNullConnection);
+			} catch (InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
+			i++;
+		}
+		
+		if (null != bConnection) {
+			int j = 0;
+			while (j < retryTimesWhileCanNotConnectServer || retryTimesWhileCanNotConnectServer <= 0) {
+				PreparedStatement pstmt;
+				try {
+					pstmt = bConnection.prepareStatement(keepAliveSql);
+					pstmt.execute();
+					pstmt.close();
+					break;
+				} catch (SQLException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+				//若未正常打开，则重新连接数据库，以保证返回的数据库连接可用
+				DriverManager.setLoginTimeout((int)(timeout/1000));
+				
+				try {
+					Connection jdbcConnection = DriverManager.getConnection(url, user, password);
+					bConnection.setConn(jdbcConnection);
+				} catch (SQLException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+				
+				try {
+					Thread.sleep(retryDurationDuringConnectingServer);
+				} catch (InterruptedException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+				++j;
+			}
+			
+			try {
+				bConnection.setAutoCommit(true);
+			} catch (SQLException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
+			usingPool.put(bConnection.getConn(), bConnection);
+			return bConnection;
+		} else {
+			return null;
+		}
+	}
+	
+	public void close () {
+		keepClean = false;
+		closed = true;
+	}
+
+	public String getDriver() {
+		return driver;
+	}
+
+	public void setDriver(String driver) {
+		this.driver = driver;
+	}
+
+	public String getUrl() {
+		return url;
+	}
+
+	public void setUrl(String url) {
+		this.url = url;
+	}
+
+	public String getUser() {
+		return user;
+	}
+
+	public void setUser(String user) {
+		this.user = user;
+	}
+
+	public String getPassword() {
+		return password;
+	}
+
+	public void setPassword(String password) {
+		this.password = password;
+	}
+
+	public int getMaxSize() {
+		return maxSize;
+	}
+
+	public void setMaxSize(int maxSize) {
+		this.maxSize = maxSize;
+	}
+
+	public int getMinSize() {
+		return minSize;
+	}
+
+	public void setMinSize(int minSize) {
+		this.minSize = minSize;
+	}
+
+	public int getInitSize() {
+		return initSize;
+	}
+
+	public void setInitSize(int initSize) {
+		this.initSize = initSize;
+	}
+
+	public int getIncrement() {
+		return increment;
+	}
+
+	public void setIncrement(int increment) {
+		this.increment = increment;
+	}
+
+	public long getTimeout() {
+		return timeout;
+	}
+
+	public void setTimeout(long timeout) {
+		this.timeout = timeout;
+	}
+
+	public long getIdleTestPeriod() {
+		return idleTestPeriod;
+	}
+
+	public void setIdleTestPeriod(long idleTestPeriod) {
+		this.idleTestPeriod = idleTestPeriod;
+	}
+
+	public long getMaxIdleTime() {
+		return maxIdleTime;
+	}
+
+	public void setMaxIdleTime(long maxIdleTime) {
+		this.maxIdleTime = maxIdleTime;
+	}
+
+	public int getRetryTimesWhileCanNotConnectServer() {
+		return retryTimesWhileCanNotConnectServer;
+	}
+
+	public void setRetryTimesWhileCanNotConnectServer(
+			int retryTimesWhileCanNotConnectServer) {
+		this.retryTimesWhileCanNotConnectServer = retryTimesWhileCanNotConnectServer;
+	}
+
+	public int getRetryTimesWhileGetNullConnection() {
+		return retryTimesWhileGetNullConnection;
+	}
+
+	public void setRetryTimesWhileGetNullConnection(
+			int retryTimesWhileGetNullConnection) {
+		this.retryTimesWhileGetNullConnection = retryTimesWhileGetNullConnection;
+	}
+
+	public long getRetryDurationDuringGetNullConnection() {
+		return retryDurationDuringGetNullConnection;
+	}
+
+	public void setRetryDurationDuringGetNullConnection(
+			long retryDurationDuringGetNullConnection) {
+		this.retryDurationDuringGetNullConnection = retryDurationDuringGetNullConnection;
+	}
+
+	public long getRetryDurationDuringConnectingServer() {
+		return retryDurationDuringConnectingServer;
+	}
+
+	public void setRetryDurationDuringConnectingServer(
+			long retryDurationDuringConnectingServer) {
+		this.retryDurationDuringConnectingServer = retryDurationDuringConnectingServer;
+	}
+
+	public String getKeepAliveSql() {
+		return keepAliveSql;
+	}
+
+	public void setKeepAliveSql(String keepAliveSql) {
+		this.keepAliveSql = keepAliveSql;
+	}
+
+	public long getMaxUsingTime() {
+		return maxUsingTime;
+	}
+
+	public void setMaxUsingTime(long maxUsingTime) {
+		this.maxUsingTime = maxUsingTime;
+	}
+
+	public boolean isKeepClean() {
+		return keepClean;
+	}
+
+	public void setKeepClean(boolean keepClean) {
+		this.keepClean = keepClean;
+	}
+
+	public boolean isCloseIdleConnection() {
+		return closeIdleConnection;
+	}
+
+	public void setCloseIdleConnection(boolean closeIdleConnection) {
+		this.closeIdleConnection = closeIdleConnection;
+	}
+	
+	
 	
 }
